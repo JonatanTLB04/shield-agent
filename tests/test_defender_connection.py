@@ -6,8 +6,11 @@ end: authenticates, pulls real devices + recommendations, and looks up
 one device by hostname — the same kind of proof-of-life check done for
 Datto RMM.
 
-This always hits the real API regardless of SHIELD_DRY_RUN in .env —
-same behavior as test_datto_connection.py.
+This always hits the real API regardless of SHIELD_DRY_RUN in .env, and
+always searches your FULL device fleet regardless of PILOT_DEVICE_HOSTNAMES
+in .env — this is a diagnostic tool, not the real production run, so it
+shouldn't be limited by whatever pilot device happens to be configured.
+Your real main.py run stays correctly restricted either way.
 
 Run with:  python -m tests.test_defender_connection
 """
@@ -16,6 +19,7 @@ import os
 import sys
 
 os.environ["SHIELD_DRY_RUN"] = "false"
+os.environ["PILOT_DEVICE_HOSTNAMES"] = ""
 
 from config import settings  # noqa: E402
 from connectors.defender_connector import DefenderConnector  # noqa: E402
@@ -41,11 +45,18 @@ def main():
     token = connector._get_access_token()
     print(f"Got a token ({len(token)} chars). Authentication works.\n")
 
-    print("Pulling every exposed device with active recommendations...")
+    print("Pulling every exposed device with active recommendations (full fleet, no pilot filter)...")
     exposed = connector.list_exposed_devices_with_recommendations()
     print(f"Found {len(exposed)} device(s) with at least one recommendation.\n")
 
-    hostname = input("Type the hostname to look up (e.g. karlaoros): ").strip().lower()
+    hostname = input("Type a hostname to look up (or leave blank to list all device names): ").strip().lower()
+
+    if not hostname:
+        print("\nAll device names with at least one recommendation:")
+        for device, recs in exposed:
+            actionable = [r for r in recs if r.category in ("windows_update", "browser_restart")]
+            print(f"  {device.device_name}  —  {len(recs)} total, {len(actionable)} actionable")
+        sys.exit(0)
 
     match = next(
         ((device, recs) for device, recs in exposed if hostname in device.device_name.lower()),
@@ -62,7 +73,8 @@ def main():
     print(f"\nFound it — {device.device_name} (device ID: {device.device_id})")
     print(f"{len(recs)} recommendation(s):\n")
     for r in recs:
-        print(f"  - {r.title}  (category: {r.category}, severity: {r.severity})")
+        flag = " <-- actionable" if r.category in ("windows_update", "browser_restart") else ""
+        print(f"  - {r.title}  (category: {r.category}, severity: {r.severity}){flag}")
         if r.cve_ids:
             print(f"    CVEs: {', '.join(r.cve_ids)}")
 

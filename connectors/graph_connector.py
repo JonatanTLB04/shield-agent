@@ -1,7 +1,10 @@
-"""
-Connector for Microsoft Graph — used for two things only:
+﻿"""
+Connector for Microsoft Graph — used for three things:
   1. Resolving a device's logged-on user into a full profile (name, email).
-  2. Sending the notification email.
+  2. Fallback: resolving a bare Windows login name (from Datto RMM, when
+     Defender's own lookup is empty) into that same full profile, by
+     display-name search rather than guessing a UPN format.
+  3. Sending the notification email.
 
 Requires application permissions User.Read.All and Mail.Send, granted with
 admin consent. Uses the same certificate credential as the Defender
@@ -9,6 +12,7 @@ connector (same app registration is fine, or a separate one — see the
 architecture doc's note on keeping blast radius separated).
 """
 
+import re
 import time
 
 import requests
@@ -53,7 +57,8 @@ class GraphConnector:
         }
 
     def get_user_profile(self, user_upn: str) -> dict:
-        """Returns displayName, mail, and department for a user."""
+        """Returns displayName, mail, and department for a user. Needs an
+        exact, full UPN or email — this does not search or guess."""
         if settings.dry_run:
             return fixtures.fake_user_profile(user_upn)
 
@@ -65,6 +70,44 @@ class GraphConnector:
         )
         resp.raise_for_status()
         return resp.json()
+
+    def find_user_by_login_hint(self, login_hint: str) -> dict | None:
+        """
+        Fallback resolution for a bare Windows login name (e.g.
+        "KenzieNasser", from Datto RMM's lastLoggedInUser) into a real
+        Graph profile.
+
+        Confirmed against a real account on 2026-07-17: the local Windows
+        login name does not reliably match the real userPrincipalName
+        format ("KenzieNasser" locally vs. the real UPN
+        "kenzie.nasser@thelaunchbox.com", dot-separated). So instead of
+        guessing a UPN/mailNickname pattern, this splits the PascalCase
+        login hint into separate words ("Kenzie", "Nasser") and searches
+        by display name instead — confirmed to work via a live test.
+
+        Known limitation: this word-split heuristic can misfire on names
+        that don't split cleanly into two simple capitalized words (e.g.
+        a last name like "McDonald", or names with three or more parts).
+        Good enough as a fallback, not perfect — if it ever returns the
+        wrong person or no one, that's worth a manual look rather than
+        assuming it always works.
+        """
+        if settings.dry_run:
+            return fixtures.fake_user_profile(login_hint)
+
+        # "KenzieNasser" -> "Kenzie Nasser"
+        name_guess = re.sub(r'(?<!^)(?=[A-Z])', ' ', login_hint).strip()
+
+        resp = requests.get(
+            f"{settings.graph_base_url}/users"
+            f'?$search="displayName:{name_guess}"'
+            f"&$select=displayName,mail,department,userPrincipalName",
+            headers={**self._headers(), "ConsistencyLevel": "eventual"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        matches = resp.json().get("value", [])
+        return matches[0] if matches else None
 
     def send_mail(self, to_address: str, subject: str, body_html: str) -> None:
         if settings.dry_run:

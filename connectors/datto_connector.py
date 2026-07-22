@@ -1,10 +1,15 @@
 ﻿"""
 Connector for Datto RMM.
 
-Two jobs, matching the design we settled on:
+Three jobs now:
   1. Verify: pull the *live* installed version / patch status for a device,
      independent of Defender's own (slower) refresh cycle.
-  2. Remediate: trigger a Quick Job to run a remediation script directly,
+  2. Fallback user resolution: when Defender's own logged-on-user lookup
+     comes back empty (this happens a lot in practice), pull Datto RMM's
+     own "lastLoggedInUser" field instead — confirmed via a real device
+     dump on 2026-07-17 to be reliably populated where Defender's version
+     often isn't.
+  3. Remediate: trigger a Quick Job to run a remediation script directly,
      for the things that are safe to fix silently (e.g. relaunching a
      browser process) without needing the user to do anything.
 
@@ -55,16 +60,8 @@ class DattoConnector:
     # ------------------------------------------------------------------ #
     # Device matching
     # ------------------------------------------------------------------ #
-    def find_device_uid_by_hostname(self, hostname: str) -> str | None:
-        """
-        Defender's device ID and Datto RMM's device UID are different values
-        from different systems — hostname is the one thing both track, so
-        that's what we match on. Returns None if the device isn't onboarded
-        to Datto RMM yet (expected during a partial migration — not an error).
-        """
-        if settings.dry_run:
-            return fixtures.fake_datto_device_uid(hostname)
-
+    def _find_raw_device_by_hostname(self, hostname: str) -> dict | None:
+        """Shared by every lookup below — one real API call, full raw record."""
         resp = requests.get(
             f"{settings.datto_api_url}/api/v2/account/devices",
             headers=self._headers(),
@@ -75,8 +72,50 @@ class DattoConnector:
         devices = resp.json().get("devices", [])
         for d in devices:
             if d.get("hostname", "").lower() == hostname.lower():
-                return d.get("uid")
-        return None  # Not migrated to Datto RMM yet — caller must handle this.
+                return d
+        return None
+
+    def find_device_uid_by_hostname(self, hostname: str) -> str | None:
+        """
+        Defender's device ID and Datto RMM's device UID are different values
+        from different systems — hostname is the one thing both track, so
+        that's what we match on. Returns None if the device isn't onboarded
+        to Datto RMM yet (expected during a partial migration — not an error).
+        """
+        if settings.dry_run:
+            return fixtures.fake_datto_device_uid(hostname)
+
+        raw = self._find_raw_device_by_hostname(hostname)
+        return raw.get("uid") if raw else None
+
+    def get_last_logged_in_user_hint(self, hostname: str) -> str | None:
+        """
+        Fallback for when Defender's own logged-on-user lookup comes back
+        empty. Datto RMM's "lastLoggedInUser" field (confirmed real, e.g.
+        "AzureAD\\KenzieNasser") is more consistently populated than
+        Defender's session-based version.
+
+        Returns a bare login name only (e.g. "KenzieNasser"), with the
+        domain prefix stripped — this is NOT a full UPN or email address.
+        The caller must resolve it against Microsoft Graph to get a real
+        address; never email this value directly.
+        """
+        if settings.dry_run:
+            # The dry-run fixtures already resolve a user_upn directly via
+            # Defender's own fake lookup, so this fallback path never
+            # actually needs to fire in a dry run.
+            return None
+
+        raw = self._find_raw_device_by_hostname(hostname)
+        if not raw:
+            return None
+
+        last_user = (raw.get("lastLoggedInUser") or "").strip()
+        if not last_user:
+            return None
+        if "\\" in last_user:
+            return last_user.split("\\", 1)[1] or None
+        return last_user
 
     # ------------------------------------------------------------------ #
     # Verification

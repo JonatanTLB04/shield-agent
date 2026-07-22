@@ -7,9 +7,15 @@ The cycle, matching the architecture doc exactly:
 
   1. Poll Defender for exposed devices + recommendations.
   2. Gate out anything with no vendor fix available yet (e.g. OpenSSL).
-  3. Map each device to its user.
-  4. For brand-new findings: draft a message with Claude, send it, record it.
-  5. For findings due for a recheck: verify via Datto RMM's live data.
+  3. Gate out anything that isn't a restart-type fix (see NOTIFIABLE_CATEGORIES) —
+     a regular employee can't act on a policy/hardening setting, only on
+     "restart your browser" or "restart your laptop."
+  4. Map each device to its user — try Defender's own lookup first, then
+     fall back to Datto RMM's lastLoggedInUser + a Graph search if that
+     comes back empty (this happens often in practice).
+  5. For brand-new findings: draft ONE combined message with Claude covering
+     every actionable finding on that device, send it, record it.
+  6. For findings due for a recheck: verify via Datto RMM's live data.
        - Fixed?     -> mark resolved, done.
        - Not fixed? -> send a reminder, or escalate if the limit is reached.
 """
@@ -24,6 +30,12 @@ from connectors.escalation_connector import EscalationConnector
 from core.claude_client import ClaudeClient
 from core.state_store import StateStore
 from core.models import Finding, Recommendation
+
+# Only these categories are things a regular employee can actually act on
+# by restarting something. Everything else (app_update, config, unknown)
+# gets tracked but never emailed — there's no message template for "go
+# change this registry policy yourself," and there shouldn't be one.
+NOTIFIABLE_CATEGORIES = {"windows_update", "browser_restart"}
 
 
 class Orchestrator:
@@ -41,16 +53,13 @@ class Orchestrator:
         summary = {
             "new_findings": 0,
             "on_hold_no_fix": 0,
+            "not_actionable": 0,
             "notified": 0,
             "resolved": 0,
             "reminded": 0,
             "escalated": 0,
         }
 
-        # Fetched once, used by both steps below — this is what lets us fall
-        # back to "does Defender still list this?" for any device that
-        # isn't in Datto RMM yet (partial migration), instead of that device
-        # simply never getting rechecked.
         exposed = self.defender.list_exposed_devices_with_recommendations()
         if settings.pilot_device_hostnames:
             exposed = [
@@ -69,13 +78,36 @@ class Orchestrator:
         return summary
 
     # ------------------------------------------------------------------ #
-    # Step 1-3: detect new findings and notify
+    def _resolve_user(self, device) -> str | None:
+        """
+        Defender's own logged-on-user lookup is often empty in practice
+        (confirmed against real devices on 2026-07-17). When it is, fall
+        back to Datto RMM's own audit data instead — its lastLoggedInUser
+        field is more reliably populated — and resolve that bare login
+        name into a real address via Graph.
+        """
+        user_upn = self.defender.get_logged_on_user(device.device_id)
+        if user_upn:
+            return user_upn
+
+        login_hint = self.datto.get_last_logged_in_user_hint(device.device_name)
+        if not login_hint:
+            return None
+
+        profile = self.graph.find_user_by_login_hint(login_hint)
+        return profile.get("userPrincipalName") if profile else None
+
+    # ------------------------------------------------------------------ #
+    # Step 1-5: detect new findings and notify (one email per device, not
+    # one email per recommendation)
     # ------------------------------------------------------------------ #
     def _ingest_new_findings(self, exposed, summary: dict) -> None:
         for device, recommendations in exposed:
             if settings.pilot_device_hostnames and device.device_name not in settings.pilot_device_hostnames:
                 continue  # Not an approved pilot device — SHIELD ignores it entirely.
-            user_upn = self.defender.get_logged_on_user(device.device_id)
+            user_upn = self._resolve_user(device)
+
+            actionable = []
 
             for rec in recommendations:
                 existing = self.store.get(device.device_id, rec.recommendation_id)
@@ -99,38 +131,40 @@ class Orchestrator:
                     summary["on_hold_no_fix"] += 1
                     continue
 
-                if not user_upn:
-                    # No confident owner — leave it tracked but unnotified;
-                    # a human should review these periodically rather than
-                    # guessing who to email.
+                if rec.category not in NOTIFIABLE_CATEGORIES:
+                    summary["not_actionable"] += 1
                     continue
 
-                self._notify(finding, user_upn)
-                summary["notified"] += 1
+                if not user_upn:
+                    # No confident owner even after the Datto RMM fallback —
+                    # leave it tracked but unnotified.
+                    continue
 
-    def _notify(self, finding: Finding, user_upn: str) -> None:
+                actionable.append(finding)
+
+            if actionable:
+                self._notify(actionable, user_upn)
+                summary["notified"] += len(actionable)
+
+    def _notify(self, findings: list[Finding], user_upn: str) -> None:
         profile = self.graph.get_user_profile(user_upn)
-        subject, body = self.claude.draft_notification(profile["displayName"], finding)
+        subject, body = self.claude.draft_notification(profile["displayName"], findings)
         self.graph.send_mail(profile["mail"], subject, body)
-        self.store.mark_notified(finding.device_id, finding.recommendation_id)
+        for finding in findings:
+            self.store.mark_notified(finding.device_id, finding.recommendation_id)
 
     # ------------------------------------------------------------------ #
-    # Step 4: recheck, remind, or escalate
+    # Step 6: recheck, remind, or escalate
     # ------------------------------------------------------------------ #
     def _process_due_rechecks(self, still_exposed_keys: set, summary: dict) -> None:
         for finding in self.store.get_due_for_recheck():
             key = (finding.device_id, finding.recommendation_id)
 
             if key not in still_exposed_keys:
-                # Defender itself no longer lists this — resolved, whether
-                # or not the device has been migrated to Datto RMM yet.
                 self.store.mark_resolved(finding.device_id, finding.recommendation_id)
                 summary["resolved"] += 1
                 continue
 
-            # Defender still sees it as open. Try the faster Datto RMM check
-            # if this device has been migrated — if not, we simply wait for
-            # Defender's own next poll instead of treating it as an error.
             if self._verify_fixed_via_datto(finding):
                 self.store.mark_resolved(finding.device_id, finding.recommendation_id)
                 summary["resolved"] += 1
@@ -143,28 +177,16 @@ class Orchestrator:
             else:
                 if finding.user_upn:
                     reminder_finding = replace(finding, reminder_count=finding.reminder_count)
-                    self._notify(reminder_finding, finding.user_upn)
+                    self._notify([reminder_finding], finding.user_upn)
                 self.store.mark_reminded(finding.device_id, finding.recommendation_id)
                 summary["reminded"] += 1
 
     def _verify_fixed_via_datto(self, finding: Finding) -> bool:
-        """
-        The key design decision from our conversation: don't wait on
-        Defender's own slow refresh where possible. Check the device's real,
-        current state directly via Datto RMM instead — matched by hostname,
-        since Defender and Datto RMM use different device IDs.
-
-        Returns False (not fixed, or unknown) for devices not yet migrated
-        to Datto RMM — those simply rely on the still_exposed_keys check
-        above catching it on a later run once Defender itself clears it.
-        """
         if finding.category == "browser_restart":
             software = "Chrome" if "chrome" in finding.title.lower() else "Edge"
             version = self.datto.get_installed_version(finding.device_name, software)
             if version is None:
-                return False  # Not fixed yet, or not migrated to Datto RMM yet
-            # A real implementation would compare this against the specific
-            # fixed version named in the recommendation's title.
+                return False
             return version.startswith("141")
 
         if finding.category == "windows_update":
@@ -173,7 +195,6 @@ class Orchestrator:
                 return False
             return status.get("patchStatus") == "Fully Patched"
 
-        # For everything else, rely on the still_exposed_keys check above.
         return False
 
 

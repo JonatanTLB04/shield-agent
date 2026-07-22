@@ -1,4 +1,4 @@
-"""
+﻿"""
 Connector for Microsoft Defender for Endpoint.
 
 Talks to the native Defender for Endpoint API (not the Graph Security API —
@@ -69,25 +69,49 @@ class DefenderConnector:
         Returns every device that has at least one active recommendation,
         paired with that device's recommendations. This is the single
         entry point the orchestrator calls once per daily cycle.
+
+        Calls the per-device endpoint (GET /api/machines/{id}/recommendations)
+        once per machine, since the bulk /api/recommendations endpoint only
+        returns aggregate counts, never a per-device list.
         """
         if settings.dry_run:
             return fixtures.fake_exposed_devices_with_recommendations()
 
         results = []
-        recommendations = self._list_all_recommendations()
+        machines = self._list_machines()
 
-        # Group recommendations by device
-        by_device: dict[str, list[Recommendation]] = {}
-        for rec in recommendations:
-            by_device.setdefault(rec.device_id, []).append(rec)
+        # One API call per machine now instead of one call total, so during
+        # the pilot, skip anything outside the approved device list rather
+        # than querying every machine and throwing most of it away.
+        if settings.pilot_device_hostnames:
+            machines = [
+                m for m in machines
+                if m.get("computerDnsName") in settings.pilot_device_hostnames
+            ]
 
-        devices_by_id = {d["id"]: d for d in self._list_machines()}
-
-        for device_id, recs in by_device.items():
-            raw = devices_by_id.get(device_id)
-            if not raw:
+        for raw_machine in machines:
+            device_id = raw_machine.get("id")
+            if not device_id:
                 continue
-            device = ExposedDevice(device_id=device_id, device_name=raw.get("computerDnsName", device_id))
+
+            raw_recs = self._list_recommendations_for_device(device_id)
+            if not raw_recs:
+                continue
+
+            recs = [
+                Recommendation(
+                    recommendation_id=r.get("id", ""),
+                    device_id=device_id,
+                    title=r.get("recommendationName", "Unknown recommendation"),
+                    category=_categorize(r),
+                    severity=r.get("severityScore", "Medium"),
+                    cve_ids=r.get("relatedCves", []) or [],
+                    affected_software=r.get("productName", ""),
+                )
+                for r in raw_recs
+            ]
+
+            device = ExposedDevice(device_id=device_id, device_name=raw_machine.get("computerDnsName", device_id))
             results.append((device, recs))
 
         return results
@@ -121,30 +145,14 @@ class DefenderConnector:
         resp.raise_for_status()
         return resp.json().get("value", [])
 
-    def _list_all_recommendations(self) -> list[Recommendation]:
+    def _list_recommendations_for_device(self, device_id: str) -> list[dict]:
         resp = requests.get(
-            f"{settings.defender_base_url}/api/recommendations",
+            f"{settings.defender_base_url}/api/machines/{device_id}/recommendations",
             headers=self._headers(),
             timeout=30,
         )
         resp.raise_for_status()
-        raw_recs = resp.json().get("value", [])
-
-        out = []
-        for r in raw_recs:
-            for device_id in r.get("relatedComponent", {}).get("deviceIds", []) or r.get("machineIds", []):
-                out.append(
-                    Recommendation(
-                        recommendation_id=r.get("id", ""),
-                        device_id=device_id,
-                        title=r.get("recommendationName", "Unknown recommendation"),
-                        category=_categorize(r),
-                        severity=r.get("severityScore", "Medium"),
-                        cve_ids=r.get("relatedCves", []) or [],
-                        affected_software=r.get("productName", ""),
-                    )
-                )
-        return out
+        return resp.json().get("value", [])
 
 
 def _categorize(raw_recommendation: dict) -> str:
@@ -153,11 +161,18 @@ def _categorize(raw_recommendation: dict) -> str:
     category, which is what picks the message template and decides
     whether a Datto RMM script exists for it. Extend this as you cover
     more recommendation types.
+
+    FIXED 2026-07-17: matching on "chrome"/"edge" alone was too broad —
+    it caught config/hardening settings that happen to mention the browser
+    by name (e.g. "Disable 'Continue running background apps when Google
+    Chrome is closed'"), not just genuine pending updates. Now requires an
+    update/restart word alongside the browser name, same rule already used
+    for Windows below.
     """
     name = (raw_recommendation.get("recommendationName") or "").lower()
     rtype = (raw_recommendation.get("remediationType") or "").lower()
 
-    if "chrome" in name or "edge" in name:
+    if ("chrome" in name or "edge" in name) and ("update" in name or "restart" in name):
         return "browser_restart"
     if "windows" in name and ("update" in name or "restart" in name):
         return "windows_update"
