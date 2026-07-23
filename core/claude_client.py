@@ -1,39 +1,44 @@
 ﻿"""
-Claude integration — this is the "reasoning" layer, not a data-mover.
+Claude integration - this is the "reasoning" layer, not a data-mover.
 Given one or more findings for the same person (device + recommendation),
-this turns them into a single clear, friendly, non-technical email a
-regular employee will actually understand and act on. It does NOT call
-any of the other APIs itself — the orchestrator hands it plain data and
-gets back plain text.
+this turns them into a short, friendly, non-technical description per
+item, which then gets rendered into the branded HTML template (see
+core/email_template.py). Claude does NOT write raw HTML directly anymore
+- it returns structured JSON, and the template owns the actual visual
+layout. This keeps the branding consistent no matter what Claude writes.
 """
+
+import json
 
 from anthropic import Anthropic
 
 from config import settings
 from core.models import Finding
+from core.email_template import render_email
 
 _SYSTEM_PROMPT = """\
-You write short, friendly, non-technical emails for SHIELD, an internal \
-IT security assistant. The reader is a regular employee, not an IT \
-professional — never use jargon like CVE, CVSS, exposure score, or \
+You help draft short, friendly, non-technical notifications for SHIELD, \
+an internal IT security assistant. The reader is a regular employee, not \
+an IT professional - never use jargon like CVE, CVSS, exposure score, or \
 recommendation ID. Never mention Microsoft Defender, Datto RMM, or any \
-internal system by name; the email should read as if it's simply from \
-the IT/Security team.
+internal system by name.
 
-You may be given one item to fix, or several. If there is more than one, \
-combine them into a single email — never write it as if there are \
-several unrelated emails. A short, friendly list (one line per item) is \
-fine if there's more than one action needed. If there's only one, just \
-write it as plain sentences, no list needed.
+You will be given one or more items to fix for the same person. For each \
+item, write ONE short line (about 15-25 words) explaining what needs to \
+happen and, briefly, why it matters - no fear-mongering, just plain and \
+clear. Start each line with the action in bold using <strong> tags, \
+followed by a short explanation, matching this exact style:
 
-Always explain, in plain language, why this matters (briefly, no \
-fear-mongering) and exactly what the reader needs to do for each item. If \
-any item's reminder_count is greater than 0, acknowledge gently that this \
-is a follow-up, without sounding annoyed.
+<strong>Restart your browser (Chrome)</strong> - an update is downloaded and waiting for a restart to apply.
 
-Output only the email body as clean HTML (a couple of <p> tags, and a \
-<ul>/<li> list only if there's more than one item) — no subject line, no \
-preamble, no markdown fences.
+Also write one short intro line (a single sentence, no greeting - the \
+greeting is added separately) that fits above the list of items. If any \
+item's reminder_count is greater than 0, make the intro gently \
+acknowledge this is a follow-up, without sounding annoyed.
+
+Output ONLY a JSON object, nothing else, no markdown fences, no preamble, \
+in exactly this shape:
+{"intro": "<one sentence>", "items": ["<item 1 html>", "<item 2 html>", ...]}
 """
 
 _ACTION_HINTS = {
@@ -52,17 +57,18 @@ class ClaudeClient:
     def draft_notification(self, user_display_name: str, findings: list[Finding]) -> tuple[str, str]:
         """
         Returns (subject, html_body) for one or more findings on the same
-        device/user, combined into a single email. Always pass a list, even
-        for a single finding — e.g. draft_notification(name, [finding]).
+        device/user, combined into a single branded email. Always pass a
+        list, even for a single finding - e.g. draft_notification(name, [finding]).
         """
         if not findings:
             raise ValueError("draft_notification called with an empty findings list")
 
         is_reminder = any(f.reminder_count > 0 for f in findings)
+        first_name = user_display_name.split()[0]
 
         if settings.dry_run and not settings.anthropic_api_key:
             # Allows a fully offline dry run with zero API keys configured at all.
-            return _offline_fallback(user_display_name, findings, is_reminder)
+            return _offline_fallback(first_name, findings, is_reminder)
 
         items_block = "\n".join(
             f"- Device: {f.device_name} | What needs to happen: "
@@ -71,7 +77,7 @@ class ClaudeClient:
             for f in findings
         )
         user_prompt = f"""\
-Recipient's first name: {user_display_name}
+Recipient's first name: {first_name}
 Number of items in this email: {len(findings)}
 
 {items_block}
@@ -82,7 +88,20 @@ Number of items in this email: {len(findings)}
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        body_html = "".join(block.text for block in response.content if block.type == "text")
+        raw_text = "".join(block.text for block in response.content if block.type == "text").strip()
+
+        # Defensive parsing - strip markdown fences if Claude adds them
+        # despite being told not to, rather than erroring out mid-pipeline.
+        if raw_text.startswith("```"):
+            raw_text = raw_text.strip("`")
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:].strip()
+
+        parsed = json.loads(raw_text)
+        intro_text = parsed["intro"]
+        items = parsed["items"]
+
+        body_html = render_email(first_name, intro_text, items)
         subject = (
             "Quick follow-up: your laptop still needs attention"
             if is_reminder
@@ -91,30 +110,26 @@ Number of items in this email: {len(findings)}
         return subject, body_html
 
 
-def _offline_fallback(name: str, findings: list[Finding], is_reminder: bool) -> tuple[str, str]:
-    """Used only when there's no Anthropic API key at all yet, so dry runs work out of the box."""
-    first_name = name.split()[0]
+def _offline_fallback(first_name: str, findings: list[Finding], is_reminder: bool) -> tuple[str, str]:
+    """Used only when there's no Anthropic API key at all yet, so dry runs
+    work out of the box, still using the same branded template."""
     hints = [_ACTION_HINTS.get(f.category, _ACTION_HINTS["unknown"]) for f in findings]
+    items = [
+        f"<strong>{f.device_name}</strong> needs {hint}."
+        for f, hint in zip(findings, hints)
+    ]
 
-    if len(findings) == 1:
-        prefix = "Just a quick follow-up — " if is_reminder else f"Hi {first_name}, "
-        body = (
-            f"<p>{prefix}your device ({findings[0].device_name}) needs {hints[0]}. "
-            f"It only takes a minute and helps keep your laptop secure.</p>"
-            f"<p>Thanks for taking care of this!</p>"
-        )
+    if is_reminder:
+        intro_text = "Just a quick follow-up on something from before, it still needs a bit of attention."
+    elif len(findings) == 1:
+        intro_text = "Your laptop needs a quick thing taken care of to stay secure."
     else:
-        intro = "Just a quick follow-up on a couple of things — " if is_reminder else f"Hi {first_name}, "
-        items_html = "".join(f"<li>{hint} ({f.device_name})</li>" for f, hint in zip(findings, hints))
-        body = (
-            f"<p>{intro}your device needs a couple of quick fixes:</p>"
-            f"<ul>{items_html}</ul>"
-            f"<p>Both only take a minute and help keep your laptop secure. Thanks for taking care of this!</p>"
-        )
+        intro_text = "Your laptop needs a couple of quick things taken care of to stay secure."
 
+    body_html = render_email(first_name, intro_text, items)
     subject = (
         "Quick follow-up: your laptop still needs attention"
         if is_reminder
         else "Action needed: your laptop needs a quick fix"
     )
-    return subject, body
+    return subject, body_html
