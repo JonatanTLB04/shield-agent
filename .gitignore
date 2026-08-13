@@ -5,3 +5,14 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# One-off debug/patch scripts - kept locally, never committed
+check_*.py
+diag_*.py
+diagnose_*.py
+dump_*.py
+fix_*.py
+patch_*.py
+patched_*.py
+new_config_field.txt
+*.bak*

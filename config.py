@@ -9,7 +9,6 @@ references, not a plain .env file.
 
 import os
 from dataclasses import dataclass
-
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -51,7 +50,6 @@ class Settings:
     defender_token_resource: str = os.getenv(
         "DEFENDER_TOKEN_RESOURCE", "https://api.securitycenter.microsoft.com"
     )
-
     graph_base_url: str = "https://graph.microsoft.com/v1.0"
 
     # --- Datto RMM -------------------------------------------------------
@@ -83,6 +81,18 @@ class Settings:
     # empty ONLY once you're intentionally ready for a company-wide rollout.
     pilot_device_hostnames: tuple[str, ...] = tuple(
         h.strip() for h in os.getenv("PILOT_DEVICE_HOSTNAMES", "").split(",") if h.strip()
+    )
+
+    # --- Hostname aliases --------------------------------------------------
+    # Defender and Datto RMM sometimes disagree on a device's hostname
+    # (first seen with karlaoros / TLB-KOROS-LT). Maps "Defender's name ->
+    # Datto RMM's name" so any lookup against Datto by hostname resolves
+    # correctly. Format in .env: "old1:new1,old2:new2". Empty by default —
+    # add entries only for devices that actually mismatch.
+    hostname_aliases: tuple[tuple[str, str], ...] = tuple(
+        (pair.split(":")[0].strip(), pair.split(":")[1].strip())
+        for pair in os.getenv("HOSTNAME_ALIASES", "").split(",")
+        if ":" in pair
     )
 
     # --- "No fix available yet" gate ----------------------------------------

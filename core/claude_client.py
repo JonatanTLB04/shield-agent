@@ -49,6 +49,26 @@ _ACTION_HINTS = {
     "unknown": "a security item on your device that needs attention",
 }
 
+# Fixed small-print hints appended under specific categories, always
+# exactly this wording - not left up to Claude to remember every time.
+_CATEGORY_SMALL_PRINT = {
+    "browser_restart": "Just close all your open tabs and reopen the browser - that's all it takes.",
+}
+
+
+def _append_category_hints(items: list[str], findings: list[Finding]) -> list[str]:
+    """Appends a small gray tip line under an item's own description, for
+    categories in _CATEGORY_SMALL_PRINT above. Relies on items[i] matching
+    findings[i] in order, same assumption the rest of this pipeline already
+    makes about Claude's JSON output matching the input order."""
+    result = []
+    for item_html, finding in zip(items, findings):
+        hint = _CATEGORY_SMALL_PRINT.get(finding.category)
+        if hint:
+            item_html += f'<br><span style="font-size:12px; color:#6B7280;">{hint}</span>'
+        result.append(item_html)
+    return result
+
 
 class ClaudeClient:
     def __init__(self):
@@ -99,7 +119,7 @@ Number of items in this email: {len(findings)}
 
         parsed = json.loads(raw_text)
         intro_text = parsed["intro"]
-        items = parsed["items"]
+        items = _append_category_hints(parsed["items"], findings)
 
         body_html = render_email(first_name, intro_text, items)
         subject = (
@@ -118,6 +138,7 @@ def _offline_fallback(first_name: str, findings: list[Finding], is_reminder: boo
         f"<strong>{f.device_name}</strong> needs {hint}."
         for f, hint in zip(findings, hints)
     ]
+    items = _append_category_hints(items, findings)
 
     if is_reminder:
         intro_text = "Just a quick follow-up on something from before, it still needs a bit of attention."
@@ -133,3 +154,5 @@ def _offline_fallback(first_name: str, findings: list[Finding], is_reminder: boo
         else "Action needed: your laptop needs a quick fix"
     )
     return subject, body_html
+
+

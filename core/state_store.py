@@ -12,6 +12,7 @@ duplicate notifications and drives the reminder/escalation timers.
 """
 
 import sqlite3
+import json
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -36,6 +37,12 @@ CREATE TABLE IF NOT EXISTS findings (
     ticket_id TEXT,
     PRIMARY KEY (device_id, recommendation_id)
 );
+
+CREATE TABLE IF NOT EXISTS run_log (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_run_at TEXT,
+    summary_json TEXT
+);
 """
 
 
@@ -43,7 +50,7 @@ class StateStore:
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or settings.state_db_path
         with self._connect() as conn:
-            conn.execute(_SCHEMA)
+            conn.executescript(_SCHEMA)
 
     @contextmanager
     def _connect(self):
@@ -126,6 +133,35 @@ class StateStore:
                 "UPDATE findings SET status='on_hold_no_fix' "
                 "WHERE device_id=? AND recommendation_id=?",
                 (device_id, recommendation_id),
+            )
+
+    def record_run(self, summary: dict) -> None:
+        """Records that a run happened just now, regardless of whether it
+        found anything to do -- lets the dashboard show 'last run'
+        accurately instead of guessing from finding timestamps, which
+        stay silent on days nothing changed."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO run_log (id, last_run_at, summary_json) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET last_run_at=excluded.last_run_at, "
+                "summary_json=excluded.summary_json",
+                (datetime.now(timezone.utc).isoformat(), json.dumps(summary)),
+            )
+
+    def get_last_run(self) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT last_run_at, summary_json FROM run_log WHERE id = 1"
+            ).fetchone()
+        if not row:
+            return None
+        return {"last_run_at": row["last_run_at"], "summary": json.loads(row["summary_json"])}
+
+    def update_user(self, device_id: str, recommendation_id: str, user_upn: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE findings SET user_upn=? WHERE device_id=? AND recommendation_id=?",
+                (user_upn, device_id, recommendation_id),
             )
 
     def get_due_for_recheck(self) -> list[Finding]:

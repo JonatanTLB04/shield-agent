@@ -31,6 +31,7 @@ def main():
 
     orchestrator = Orchestrator()
     summary = orchestrator.run_daily_cycle()
+    orchestrator.store.record_run(summary)
 
     print("\n=== Run summary ===")
     for key, value in summary.items():

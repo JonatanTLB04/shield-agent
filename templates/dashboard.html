@@ -1,0 +1,315 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SHIELD Dashboard</title>
+<style>
+  :root {
+    --bg: #EEF2F5; --panel: #ffffff; --text: #1A1A1A; --muted: #6B7280;
+    --border: #E4E7EC; --orange: #FF6600; --orange-dark: #B84D00; --orange-tint: #FFEDE0;
+    --green: #1D9E75; --green-tint: #E1F5EE; --neutral-tint: #F1F2F4;
+    --shadow: rgba(20,20,20,0.06);
+    --dark-card-bg: #1A1A1A; --dark-card-text: #ffffff; --dark-card-muted: #b8b8b8;
+    --row-hover: #F7F8FA;
+  }
+  html.dark {
+    --bg: #121417; --panel: #1c1f24; --text: #e8e9eb; --muted: #9a9fa6;
+    --border: #2d3138; --orange: #ff8a3d; --orange-dark: #ffb27a; --orange-tint: rgba(255,138,61,0.16);
+    --green: #3ddc93; --green-tint: rgba(61,220,147,0.14); --neutral-tint: #23262c;
+    --shadow: rgba(0,0,0,0.45);
+    --dark-card-bg: #000000; --dark-card-text: #ffffff; --dark-card-muted: #9a9fa6;
+    --row-hover: #23262c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Arial, Helvetica, sans-serif;
+    margin: 0; background: var(--bg); color: var(--text); padding: 24px;
+    transition: background .15s, color .15s;
+  }
+  .wrap { max-width: 1260px; margin: 0 auto; }
+  .card {
+    background: var(--panel); border-radius: 16px;
+    box-shadow: 0 1px 2px var(--shadow), 0 8px 24px var(--shadow);
+    padding: 20px 24px; border: 1px solid var(--border);
+  }
+  .header {
+    position: relative; overflow: hidden; display: flex; align-items: center;
+    justify-content: space-between; margin-bottom: 20px;
+    background: var(--panel); border: 1px solid var(--border);
+  }
+  .header-arrow { position: absolute; right: -60px; top: -80px; width: 260px; height: 260px; opacity: 0.05; transform: rotate(8deg); }
+  .header-left { display: flex; align-items: center; gap: 18px; position: relative; z-index: 1; }
+  .header-left img.wordmark { height: 30px; display: block; }
+  .header-left img.wordmark-dark { display: none; }
+  html.dark .header-left img.wordmark-light { display: none; }
+  html.dark .header-left img.wordmark-dark { display: block; }
+  .header-divider { width: 1px; height: 34px; background: var(--border); }
+  .header-titles h1 { margin: 0; font-size: 20px; letter-spacing: 0.4px; font-weight: 800; text-transform: uppercase; color: var(--text); }
+  .header-titles p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+  .header-actions { display: flex; align-items: center; gap: 10px; position: relative; z-index: 1; }
+  .icon-btn {
+    width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--panel); display: flex; align-items: center; justify-content: center;
+    color: var(--text); cursor: pointer; text-decoration: none;
+  }
+  .btn-primary {
+    display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+    background: var(--orange); color: #ffffff; border: none;
+    border-radius: 10px; padding: 0 16px; height: 38px; font-size: 13px; font-weight: 700;
+    cursor: pointer;
+  }
+  .btn-primary:hover { background: var(--orange-dark); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; display: flex; align-items: center; gap: 12px; box-shadow: 0 1px 2px var(--shadow); }
+  .stat-icon { width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+  .stat-icon.neutral { background: var(--neutral-tint); color: var(--text); }
+  .stat-icon.orange { background: var(--orange-tint); color: var(--orange-dark); }
+  .stat-icon.green { background: var(--green-tint); color: var(--green); }
+  .stat-num { font-size: 22px; font-weight: 800; line-height: 1; }
+  .stat-label { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .grid { display: grid; grid-template-columns: 1.9fr 1fr; gap: 16px; align-items: start; }
+  .stack { display: flex; flex-direction: column; gap: 16px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 14px; font-weight: 800; color: var(--text); }
+  .card h2 .muted { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); font-weight: 700; padding: 0 10px 10px; border-bottom: 1px solid var(--border); }
+  td { padding: 12px 10px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+  tbody tr:hover { background: var(--row-hover); }
+  tr:last-child td { border-bottom: none; }
+  .device-name { font-weight: 700; }
+  .user-cell { color: var(--muted); }
+  .badge { display: inline-flex; align-items: center; font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .badge.notified { background: var(--neutral-tint); color: var(--text); }
+  .badge.reminded { background: var(--orange-tint); color: var(--orange-dark); }
+  .badge.resolved { background: var(--green-tint); color: var(--green); }
+  .resend-btn { background: var(--orange); border: none; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 700; color: #ffffff; cursor: pointer; }
+  .resend-btn:hover { background: var(--orange-dark); }
+  .muted-cell { color: var(--muted); font-size: 12px; opacity: 0.6; }
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .donut-wrap { display: flex; align-items: center; gap: 18px; }
+  .donut { width: 92px; height: 92px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+  .donut-hole { width: 62px; height: 62px; border-radius: 50%; background: var(--panel); display: flex; align-items: center; justify-content: center; flex-direction: column; }
+  .donut-hole b { font-size: 17px; color: var(--text); }
+  .donut-hole span { font-size: 10px; color: var(--muted); }
+  .legend { font-size: 12px; }
+  .legend div { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--text); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .dark-card { background: var(--dark-card-bg); color: var(--dark-card-text); border-radius: 16px; padding: 20px 22px; }
+  .dark-card .eyebrow { color: var(--orange); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+  .dark-card h3 { margin: 8px 0 4px; font-size: 17px; }
+  .dark-card p { margin: 0; font-size: 12.5px; color: var(--dark-card-muted); line-height: 1.5; }
+  .dark-card .schedule-pill { display: inline-block; margin-top: 12px; background: rgba(255,102,0,0.18); color: var(--orange); font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px; }
+  .summary-row { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .summary-row:last-child { border-bottom: none; }
+  .summary-row .k { color: var(--muted); }
+  .summary-row .v { font-weight: 700; }
+  .activity-item { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .activity-item:last-child { border-bottom: none; }
+  .activity-icon { width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+  .activity-text { font-size: 12.5px; }
+  .activity-text b { display: block; font-weight: 700; color: var(--text); }
+  .activity-text span { color: var(--muted); font-size: 11.5px; }
+  .cat-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .cat-row:last-child { margin-bottom: 0; }
+  .cat-bar-track { flex: 1; height: 8px; background: var(--neutral-tint); border-radius: 999px; overflow: hidden; }
+  .cat-bar-fill { height: 100%; border-radius: 999px; }
+  .cat-label { font-size: 12px; width: 108px; flex-shrink: 0; color: var(--text); }
+  .cat-count { font-size: 12px; font-weight: 700; width: 24px; text-align: right; }
+  .flash { padding: 12px 16px; margin-bottom: 16px; border-radius: 8px; font-size: 13px; }
+  .flash-ok { background: var(--green-tint); color: var(--green); }
+  .flash-err { background: #f2dede; color: #a94442; }
+  .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 13px; }
+</style>
+<script>
+  (function () {
+    var saved = localStorage.getItem("shieldTheme");
+    if (saved === "dark") document.documentElement.classList.add("dark");
+  })();
+  function toggleTheme() {
+    var isDark = document.documentElement.classList.toggle("dark");
+    localStorage.setItem("shieldTheme", isDark ? "dark" : "light");
+  }
+</script>
+</head>
+<body>
+<div class="wrap">
+
+{% if flash %}
+<div class="flash {{ 'flash-ok' if flash_ok else 'flash-err' }}">{{ flash }}</div>
+{% endif %}
+
+  <div class="card header">
+    <img class="header-arrow" src="{{ url_for('static', filename='tlb_arrow.png') }}" alt="">
+    <div class="header-left">
+      <img class="wordmark wordmark-light" src="{{ url_for('static', filename='tlb_logo.png') }}" alt="The Launch Box">
+      <img class="wordmark wordmark-dark" src="{{ url_for('static', filename='tlb_logo_white.png') }}" alt="The Launch Box">
+      <div class="header-divider"></div>
+      <div class="header-titles">
+        <h1>Shield</h1>
+        <p>Security operations &middot; notifiable findings tracker</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+      <a class="icon-btn" href="{{ url_for('index') }}" title="Refresh" aria-label="Refresh">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </a>
+      <a class="btn-primary" href="{{ url_for('export_pdf') }}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+        Download PDF
+      </a>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-icon neutral">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      </div>
+      <div><div class="stat-num">{{ total }}</div><div class="stat-label">Tracked</div></div>
+    </div>
+    <div class="stat">
+      <div class="stat-icon neutral">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      </div>
+      <div><div class="stat-num">{{ notified_count }}</div><div class="stat-label">Notified</div></div>
+    </div>
+    <div class="stat">
+      <div class="stat-icon orange">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3.5-7.14M21 4v5h-5"/></svg>
+      </div>
+      <div><div class="stat-num">{{ reminded_count }}</div><div class="stat-label">Reminded</div></div>
+    </div>
+    <div class="stat">
+      <div class="stat-icon green">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>
+      </div>
+      <div><div class="stat-num">{{ resolved_count }}</div><div class="stat-label">Resolved</div></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="stack">
+      <div class="card">
+        <h2>Findings <span class="muted">windows_update / browser_restart only</span></h2>
+        {% if findings %}
+        <table>
+          <tr>
+            <th>Device</th><th>User</th><th>Title</th><th>Status</th><th>Last notified</th><th>Reminders</th><th></th>
+          </tr>
+          {% for f in findings %}
+          <tr>
+            <td class="device-name">{{ f.device_name }}</td>
+            <td class="user-cell">{{ f.user_upn or '—' }}</td>
+            <td>{{ f.title }}</td>
+            <td>
+              {% if f.status in ['notified', 'reminded', 'resolved'] %}
+              <span class="badge {{ f.status }}">{{ f.status }}</span>
+              {% else %}
+              <span class="badge" style="background:{{ colors.get(f.status, '#666') }}; color:#fff;">{{ f.status }}</span>
+              {% endif %}
+            </td>
+            <td class="user-cell">{{ f.last_notified_at | friendly_dt }}</td>
+            <td>{{ f.reminder_count }}</td>
+            <td>
+              {% if f.user_upn and f.status in ['notified', 'reminded'] %}
+              <form method="post" action="{{ url_for('resend') }}" style="margin:0;">
+                <input type="hidden" name="device_id" value="{{ f.device_id }}">
+                <input type="hidden" name="recommendation_id" value="{{ f.recommendation_id }}">
+                <button class="resend-btn" type="submit">Resend</button>
+              </form>
+              {% else %}
+              <span class="muted-cell">n/a</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <div class="empty-state">No notifiable findings tracked right now.</div>
+        {% endif %}
+      </div>
+
+      <div class="row-2">
+        <div class="card">
+          <h2>Status overview</h2>
+          <div class="donut-wrap">
+            <div class="donut" style="background: conic-gradient(var(--green) 0% {{ resolved_pct }}%, var(--orange) {{ resolved_pct }}% {{ resolved_pct + reminded_pct }}%, var(--neutral-tint) {{ resolved_pct + reminded_pct }}% 100%);">
+              <div class="donut-hole"><b>{{ resolved_pct }}%</b><span>resolved</span></div>
+            </div>
+            <div class="legend">
+              <div><span class="dot" style="background:var(--green)"></span>Resolved &middot; {{ resolved_count }}</div>
+              <div><span class="dot" style="background:var(--orange)"></span>Reminded &middot; {{ reminded_count }}</div>
+              <div><span class="dot" style="background:var(--neutral-tint)"></span>Notified &middot; {{ notified_count }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="dark-card">
+          <div class="eyebrow">Next scheduled run</div>
+          <h3>Tuesday &amp; Thursday</h3>
+          <p>SHIELD checks Defender, resolves owners, and sends or reminds automatically.</p>
+          <span class="schedule-pill">4:00 PM</span>
+          {% if last_run %}
+          <p style="margin-top:12px; font-size:11.5px; color: var(--dark-card-muted);">Last run: {{ last_run.last_run_at | friendly_dt }}</p>
+          {% else %}
+          <p style="margin-top:12px; font-size:11.5px; color: var(--dark-card-muted);">Last run: not recorded yet</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="card">
+        <h2>Pilot summary</h2>
+        <div class="summary-row"><span class="k">Devices monitored</span><span class="v">{{ total }}</span></div>
+        <div class="summary-row"><span class="k">Recheck window</span><span class="v">48 hrs</span></div>
+        <div class="summary-row"><span class="k">Reminder limit</span><span class="v">2</span></div>
+        <div class="summary-row"><span class="k">Reminder interval</span><span class="v">48 hrs</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Recent activity</h2>
+        {% set recent = (findings|selectattr('last_notified_at')|list)[:4] %}
+        {% if recent %}
+        {% for f in recent %}
+        <div class="activity-item">
+          <div class="activity-icon" style="background: {{ 'var(--orange-tint)' if f.status == 'reminded' else ('var(--green-tint)' if f.status == 'resolved' else 'var(--neutral-tint)') }};">
+            {% if f.status == 'reminded' %}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--orange-dark)" stroke-width="2.2"><path d="M21 12a9 9 0 1 1-3.5-7.14M21 4v5h-5"/></svg>
+            {% elif f.status == 'resolved' %}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.2"><path d="M22 4L12 14.01l-3-3"/></svg>
+            {% else %}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text)" stroke-width="2.2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/></svg>
+            {% endif %}
+          </div>
+          <div class="activity-text"><b>{{ f.status|capitalize }} &middot; {{ f.device_name }}</b><span>{{ f.last_notified_at | friendly_dt }}</span></div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-state">No activity yet.</div>
+        {% endif %}
+      </div>
+
+      <div class="card">
+        <h2>By category</h2>
+        {% if category_counts %}
+        {% for cat, count in category_counts.items() %}
+        <div class="cat-row">
+          <span class="cat-label">{{ cat }}</span>
+          <div class="cat-bar-track"><div class="cat-bar-fill" style="width: {{ (count / total * 100) if total else 0 }}%; background: var(--orange)"></div></div>
+          <span class="cat-count">{{ count }}</span>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-state">No findings yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <p style="text-align:center; color: var(--muted); font-size: 12px; margin-top: 16px;">Generated {{ now }}</p>
+</div>
+</body>
+</html>

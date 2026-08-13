@@ -18,7 +18,6 @@ Settings > Access Control) and an API Key/Secret generated for a user.
 """
 
 import time
-
 import requests
 
 from config import settings
@@ -62,6 +61,14 @@ class DattoConnector:
     # ------------------------------------------------------------------ #
     def _find_raw_device_by_hostname(self, hostname: str) -> dict | None:
         """Shared by every lookup below — one real API call, full raw record."""
+        # Defender and Datto RMM sometimes disagree on a device's hostname
+        # (first seen with karlaoros / TLB-KOROS-LT). Translate through the
+        # configured alias map (HOSTNAME_ALIASES in .env) before searching,
+        # so every method below benefits automatically without needing its
+        # own fix.
+        aliases = dict(settings.hostname_aliases)
+        hostname = aliases.get(hostname, hostname)
+
         resp = requests.get(
             f"{settings.datto_api_url}/api/v2/account/devices",
             headers=self._headers(),
@@ -84,7 +91,6 @@ class DattoConnector:
         """
         if settings.dry_run:
             return fixtures.fake_datto_device_uid(hostname)
-
         raw = self._find_raw_device_by_hostname(hostname)
         return raw.get("uid") if raw else None
 
@@ -113,6 +119,7 @@ class DattoConnector:
         last_user = (raw.get("lastLoggedInUser") or "").strip()
         if not last_user:
             return None
+
         if "\\" in last_user:
             return last_user.split("\\", 1)[1] or None
         return last_user

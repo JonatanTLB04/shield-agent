@@ -89,11 +89,20 @@ class Orchestrator:
         user_upn = self.defender.get_logged_on_user(device.device_id)
         if user_upn:
             return user_upn
+        return self._resolve_user_by_device_name(device.device_name)
 
-        login_hint = self.datto.get_last_logged_in_user_hint(device.device_name)
+    def _resolve_user_by_device_name(self, device_name: str) -> str | None:
+        """
+        Same Datto + Graph fallback as _resolve_user, but callable with just
+        a device name -- used to retry resolution for findings stuck past
+        'detected' status (already notified/reminded), which
+        _ingest_new_findings no longer touches. Without this, a finding
+        created back when resolution failed keeps a blank user_upn forever,
+        even after resolution starts working again.
+        """
+        login_hint = self.datto.get_last_logged_in_user_hint(device_name)
         if not login_hint:
             return None
-
         profile = self.graph.find_user_by_login_hint(login_hint)
         return profile.get("userPrincipalName") if profile else None
 
@@ -105,26 +114,40 @@ class Orchestrator:
         for device, recommendations in exposed:
             if settings.pilot_device_hostnames and device.device_name not in settings.pilot_device_hostnames:
                 continue  # Not an approved pilot device — SHIELD ignores it entirely.
-            user_upn = self._resolve_user(device)
 
+            user_upn = self._resolve_user(device)
             actionable = []
 
             for rec in recommendations:
                 existing = self.store.get(device.device_id, rec.recommendation_id)
-                if existing:
-                    continue  # already tracked, nothing to do here
 
-                finding = Finding(
-                    device_id=device.device_id,
-                    recommendation_id=rec.recommendation_id,
-                    device_name=device.device_name,
-                    user_upn=user_upn,
-                    title=rec.title,
-                    category=rec.category,
-                    severity=rec.severity,
-                )
-                self.store.create_if_new(finding)
-                summary["new_findings"] += 1
+                if existing:
+                    # Already tracked. Normally nothing left to do — but if
+                    # it's stuck at "detected" (recorded on a run where it
+                    # got tracked but never actually reached notification —
+                    # e.g. dry-run mode, no user resolved yet, or the device
+                    # wasn't in the pilot list at the time), give it a real
+                    # shot now instead of skipping it forever. Without this
+                    # check, any finding that exists in the DB at all is
+                    # ignored on every future run, even if it was never
+                    # truly notified.
+                    if existing.status != "detected":
+                        continue
+                    finding = replace(existing, user_upn=user_upn or existing.user_upn)
+                    if user_upn and user_upn != existing.user_upn:
+                        self.store.update_user(device.device_id, rec.recommendation_id, user_upn)
+                else:
+                    finding = Finding(
+                        device_id=device.device_id,
+                        recommendation_id=rec.recommendation_id,
+                        device_name=device.device_name,
+                        user_upn=user_upn,
+                        title=rec.title,
+                        category=rec.category,
+                        severity=rec.severity,
+                    )
+                    self.store.create_if_new(finding)
+                    summary["new_findings"] += 1
 
                 if _has_no_available_fix(rec):
                     self.store.mark_on_hold_no_fix(device.device_id, rec.recommendation_id)
@@ -135,7 +158,7 @@ class Orchestrator:
                     summary["not_actionable"] += 1
                     continue
 
-                if not user_upn:
+                if not finding.user_upn:
                     # No confident owner even after the Datto RMM fallback —
                     # leave it tracked but unnotified.
                     continue
@@ -157,6 +180,12 @@ class Orchestrator:
     # Step 6: recheck, remind, or escalate
     # ------------------------------------------------------------------ #
     def _process_due_rechecks(self, still_exposed_keys: set, summary: dict) -> None:
+        # Findings due for a reminder are grouped by user first, so someone
+        # with two things pending (e.g. Windows + Chrome) gets one combined
+        # reminder email instead of two separate ones -- same behavior as
+        # the initial notification in _ingest_new_findings.
+        reminders_by_user: dict[str, list[Finding]] = {}
+
         for finding in self.store.get_due_for_recheck():
             key = (finding.device_id, finding.recommendation_id)
 
@@ -175,9 +204,22 @@ class Orchestrator:
                 self.store.mark_escalated(finding.device_id, finding.recommendation_id, ticket_id)
                 summary["escalated"] += 1
             else:
-                if finding.user_upn:
-                    reminder_finding = replace(finding, reminder_count=finding.reminder_count)
-                    self._notify([reminder_finding], finding.user_upn)
+                # Retry user resolution here too -- a finding created back
+                # when resolution failed would otherwise carry a blank
+                # user_upn forever, even after resolution starts working.
+                resolved_upn = finding.user_upn or self._resolve_user_by_device_name(finding.device_name)
+                if resolved_upn:
+                    if resolved_upn != finding.user_upn:
+                        self.store.update_user(finding.device_id, finding.recommendation_id, resolved_upn)
+                        finding = replace(finding, user_upn=resolved_upn)
+                    reminders_by_user.setdefault(resolved_upn, []).append(finding)
+                else:
+                    self.store.mark_reminded(finding.device_id, finding.recommendation_id)
+                    summary["reminded"] += 1
+
+        for user_upn, findings in reminders_by_user.items():
+            self._notify(findings, user_upn)
+            for finding in findings:
                 self.store.mark_reminded(finding.device_id, finding.recommendation_id)
                 summary["reminded"] += 1
 
