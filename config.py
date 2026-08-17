@@ -102,5 +102,20 @@ class Settings:
     # since vendors do eventually ship fixes.
     no_fix_keywords: tuple[str, ...] = ("openssl",)
 
+    # --- Auto-remediation ------------------------------------------------
+    # UID of the SHIELD Auto-Remediation Runner component in Datto RMM.
+    # When set, SHIELD will use Claude to generate a remediation script and
+    # run it silently on the device instead of notifying the user.
+    remediation_component_uid: str = os.getenv("SHIELD_REMEDIATION_COMPONENT_UID", "")
+
+    # Apps that SHIELD is allowed to auto-remediate silently.
+    # Add to this list carefully — only apps where a silent update is safe.
+    remediable_apps: tuple[str, ...] = tuple(
+        a.strip() for a in os.getenv(
+            "SHIELD_REMEDIABLE_APPS",
+            "Microsoft Office,Microsoft 365,Zoom,Adobe Acrobat,Adobe Reader"
+        ).split(",") if a.strip()
+    )
+
 
 settings = Settings()

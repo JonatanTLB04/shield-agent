@@ -27,6 +27,7 @@ from connectors.defender_connector import DefenderConnector
 from connectors.datto_connector import DattoConnector
 from connectors.graph_connector import GraphConnector
 from connectors.escalation_connector import EscalationConnector
+from connectors.remediation_connector import RemediationConnector
 from core.claude_client import ClaudeClient
 from core.state_store import StateStore
 from core.models import Finding, Recommendation
@@ -45,6 +46,7 @@ class Orchestrator:
         self.graph = GraphConnector()
         self.claude = ClaudeClient()
         self.escalation = EscalationConnector(self.graph)
+        self.remediation = RemediationConnector(self.datto, self.claude)
         self.store = StateStore()
 
     # ------------------------------------------------------------------ #
@@ -58,6 +60,7 @@ class Orchestrator:
             "resolved": 0,
             "reminded": 0,
             "escalated": 0,
+            "auto_remediated": 0,
         }
 
         exposed = self.defender.list_exposed_devices_with_recommendations()
@@ -155,7 +158,16 @@ class Orchestrator:
                     continue
 
                 if rec.category not in NOTIFIABLE_CATEGORIES:
-                    summary["not_actionable"] += 1
+                    remediated = self.remediation.try_remediate(
+                        device_name=device.device_name,
+                        title=rec.title,
+                        affected_software=getattr(rec, "affected_software", rec.title),
+                    )
+                    if remediated:
+                        summary.setdefault("auto_remediated", 0)
+                        summary["auto_remediated"] += 1
+                    else:
+                        summary["not_actionable"] += 1
                     continue
 
                 if not finding.user_upn:
