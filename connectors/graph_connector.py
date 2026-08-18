@@ -109,6 +109,38 @@ class GraphConnector:
         matches = resp.json().get("value", [])
         return matches[0] if matches else None
 
+
+    def find_user_by_device_hostname(self, hostname: str) -> dict | None:
+        """
+        Resolves a device hostname to a user via Intune (Microsoft Graph).
+        Used when Defender and Datto RMM both fail to identify the owner.
+        Queries /deviceManagement/managedDevices and returns the primaryUser.
+        """
+        if settings.dry_run:
+            return None
+        import urllib.parse
+        filter_q = urllib.parse.quote(f"deviceName eq '{hostname}'")
+        resp = requests.get(
+            f"{settings.graph_base_url}/deviceManagement/managedDevices"
+            f"?$filter=deviceName eq '{hostname}'"
+            f"&$select=deviceName,userPrincipalName,userDisplayName,emailAddress",
+            headers=self._headers(),
+            timeout=30,
+        )
+        if not resp.ok:
+            return None
+        devices = resp.json().get("value", [])
+        if not devices:
+            return None
+        device = devices[0]
+        upn = device.get("userPrincipalName") or device.get("emailAddress")
+        if not upn:
+            return None
+        return {
+            "userPrincipalName": upn,
+            "displayName": device.get("userDisplayName", upn.split("@")[0]),
+            "mail": upn,
+        }
     def send_mail(self, to_address: str, subject: str, body_html: str) -> None:
         if settings.dry_run:
             print(f"\n[DRY RUN] Would send email")

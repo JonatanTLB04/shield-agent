@@ -110,7 +110,11 @@ class Orchestrator:
         if not login_hint:
             return None
         profile = self.graph.find_user_by_login_hint(login_hint)
-        return profile.get("userPrincipalName") if profile else None
+        if profile:
+            return profile.get("userPrincipalName")
+        # Third fallback: Intune via Graph using device hostname
+        intune_profile = self.graph.find_user_by_device_hostname(device_name)
+        return intune_profile.get("userPrincipalName") if intune_profile else None
 
     # ------------------------------------------------------------------ #
     # Step 1-5: detect new findings and notify (one email per device, not
