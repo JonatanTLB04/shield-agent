@@ -40,14 +40,15 @@ NOTIFIABLE_CATEGORIES = {"windows_update", "browser_restart"}
 
 
 class Orchestrator:
-    def __init__(self):
-        self.defender = DefenderConnector()
+    def __init__(self, tenant=None):
+        self.defender = DefenderConnector(tenant=tenant)
+        self._tenant = tenant
         self.datto = DattoConnector()
         self.graph = GraphConnector()
         self.claude = ClaudeClient()
         self.escalation = EscalationConnector(self.graph)
         self.remediation = RemediationConnector(self.datto, self.claude)
-        self.store = StateStore()
+        self.store = StateStore(db_path=tenant.state_db_path if tenant else None)
 
     # ------------------------------------------------------------------ #
     def run_daily_cycle(self) -> dict:

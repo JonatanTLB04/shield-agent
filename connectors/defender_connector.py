@@ -19,15 +19,35 @@ import time
 import requests
 import msal
 
-from config import settings
+from config import settings, TenantConfig
 from core.models import ExposedDevice, Recommendation
 from core import fixtures
 
 
 class DefenderConnector:
-    def __init__(self):
+    def __init__(self, tenant: TenantConfig | None = None):
+        self._tenant = tenant
         self._token = None
         self._token_expires_at = 0
+
+    @property
+    def _cfg(self) -> TenantConfig:
+        """Returns the active tenant config, falling back to global settings for TLB."""
+        if self._tenant:
+            return self._tenant
+        return TenantConfig(
+            name="TLB",
+            tenant_id=settings.tenant_id,
+            client_id=settings.client_id,
+            client_secret="",
+            cert_path=settings.cert_path,
+            cert_thumbprint=settings.cert_thumbprint,
+            pilot_device_hostnames=settings.pilot_device_hostnames,
+            hostname_aliases=settings.hostname_aliases,
+            state_db_path=settings.state_db_path,
+            sender_mailbox=settings.sender_mailbox,
+            it_escalation_email=settings.it_escalation_email,
+        )
 
     # ------------------------------------------------------------------ #
     # Auth
