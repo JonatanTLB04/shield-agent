@@ -46,6 +46,8 @@ class Orchestrator:
         self.datto = DattoConnector()
         self.graph = GraphConnector()
         self.claude = ClaudeClient()
+        if tenant:
+            self.claude._tenant_name = tenant.name
         self.escalation = EscalationConnector(self.graph)
         self.remediation = RemediationConnector(self.datto, self.claude)
         self.store = StateStore(db_path=tenant.state_db_path if tenant else None)

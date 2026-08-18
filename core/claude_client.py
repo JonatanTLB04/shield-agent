@@ -15,6 +15,7 @@ from anthropic import Anthropic
 from config import settings
 from core.models import Finding
 from core.email_template import render_email
+from core.improv_email_template import render_improv_email
 
 _SYSTEM_PROMPT = """\
 You help draft short, friendly, non-technical notifications for SHIELD, \
@@ -121,7 +122,15 @@ Number of items in this email: {len(findings)}
         intro_text = parsed["intro"]
         items = _append_category_hints(parsed["items"], findings)
 
-        body_html = render_email(first_name, intro_text, items)
+        tenant_name = getattr(self, '_tenant_name', 'TLB')
+        if tenant_name == 'Improv':
+            body_html = render_improv_email(first_name, intro_text, items)
+        else:
+            tenant_name = getattr(self, '_tenant_name', 'TLB')
+        if tenant_name == 'Improv':
+            body_html = render_improv_email(first_name, intro_text, items)
+        else:
+            body_html = render_email(first_name, intro_text, items)
         subject = (
             "Quick follow-up: your laptop still needs attention"
             if is_reminder
