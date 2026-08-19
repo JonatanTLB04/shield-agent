@@ -126,10 +126,6 @@ Number of items in this email: {len(findings)}
         if tenant_name == 'Improv':
             body_html = render_improv_email(first_name, intro_text, items)
         else:
-            tenant_name = getattr(self, '_tenant_name', 'TLB')
-        if tenant_name == 'Improv':
-            body_html = render_improv_email(first_name, intro_text, items)
-        else:
             body_html = render_email(first_name, intro_text, items)
         subject = (
             "Quick follow-up: your laptop still needs attention"
